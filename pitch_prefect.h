@@ -10,8 +10,6 @@
 extern "C" {
 #endif
 
-//const float voiced_threshold = 0.8f;
-
 struct PP__FFT {
 	int n;
 	float* wsave;
@@ -803,7 +801,6 @@ PP_DEF void pp_init(struct PP* pp, int input_sample_rate_hz)
 	assert((pp->fft_window_function = calloc(PP_WINDOW_SIZE, sizeof *pp->fft_window_function)) != NULL);
 	for (int i = 0; i < PP_WINDOW_SIZE; i++) {
 		pp->fft_window_function[i] = pp__fft_window_function((float)i / (float)PP_WINDOW_SIZE);
-		//printf("%f\n", pp->fft_window_function[i]);
 	}
 
 	pp->window = pp__window_alloc();
@@ -1107,8 +1104,6 @@ PP_DEF void pp__flush(struct PP* pp)
 	const float f0_min = fft_bin_size * 3;
 	float best_ratio = 1;
 	float best_ratio_score = 0.0f;
-	//int dbg = pp->frame_counter == 315;
-	//if (dbg) printf("---- nsdf best guess: %f\n", nsdf_best_frequency);
 	{
 		float try_f0_ratios[] = {
 			// NSDF peak finder sometimes triggers on
@@ -1133,13 +1128,10 @@ PP_DEF void pp__flush(struct PP* pp)
 			float score = 0.0;
 			float x = 0.0;
 			const float xstep = fft_bin_size / f0_guess;
-			//if (dbg) printf("trying %f ...\n", f0_guess);
 			for (int j = 0; j < PP_WINDOW_SIZE; j++) {
 				score += pp__spectrogram_function(spectrogram[j]) * pp__spectrogram_scoring_function(x);
-				//if (dbg) printf("   %d (x=%.4f) score += %f * %f\n", j, x, spectrogram[j], pp__spectrogram_scoring_function(x));
 				x += xstep;
 			}
-			//if (dbg) printf("guess %f - score %f\n\n", f0_guess, score);
 			if (i == 0 || score > best_ratio_score) {
 				best_ratio_score = score;
 				best_ratio = ratio;
@@ -1148,7 +1140,6 @@ PP_DEF void pp__flush(struct PP* pp)
 	}
 
 	float spectrogram_corrected_best_frequency = nsdf_best_frequency * best_ratio;
-	//if (dbg) printf("...aaaand the winner is: %f\n\n", spectrogram_corrected_best_frequency);
 	pp->spectrogram_corrected_best_frequency = spectrogram_corrected_best_frequency;
 
 	float f0 = spectrogram_corrected_best_frequency; // TODO peak surfing!

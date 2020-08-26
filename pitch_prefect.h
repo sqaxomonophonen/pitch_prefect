@@ -100,6 +100,11 @@ PP_DEF void pp_destroy(struct PP* pp);
 
 #ifdef PP_IMPLEMENTATION
 
+#include <math.h>
+#include <string.h>
+#include <assert.h>
+#include <stdlib.h>
+
 /* Pitch Prefect internally operates at a sample rate Rp:
  *   Rp=Ra/D
  * Ra is the sample rate of the data fed to Pitch Prefect (typically the audio

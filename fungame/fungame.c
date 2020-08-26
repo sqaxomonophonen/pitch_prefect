@@ -35,9 +35,6 @@
 #define PP_IMPLEMENTATION
 #include "pitch_prefect.h"
 
-#define OPT_IMPLEMENTATION
-#include "opt.h"
-
 #include "sound.h"
 
 struct PP pp;
@@ -421,13 +418,6 @@ static void video_exit()
 
 char* prg;
 
-static void usage()
-{
-	fprintf(stderr, "usage: %s [-h]\n", prg);
-	fprintf(stderr, " -h / --help           help\n");
-	exit(EXIT_FAILURE);
-}
-
 static inline float lerp(float t, float a, float b)
 {
 	return a + (b-a) * t;
@@ -703,30 +693,6 @@ int main(int argc, char** argv)
 	srand(time(NULL)); // randomize seed
 
 	prg = argv[0];
-
-	struct Opt opt;
-	struct OptDef defs[] = {
-		{OPT_FLAG, 'h', "help"},
-		{0},
-	};
-	opt_init(&opt, defs, argc-1, argv+1);
-
-	while (opt_next(&opt)) {
-		if (opt.is_invalid) {
-			fprintf(stderr, "%s: %s\n\n", opt.arg, opt.errmsg);
-			usage();
-		} else if (opt.is_switch) {
-			switch (opt.short_opt) {
-			case 'h': usage();
-			default: OPT_UNREACHABLE;
-			}
-		} else if (opt.is_npos) {
-			fprintf(stderr, "%s: unexpected non-positional argument\n", opt.value);
-			usage();
-		} else {
-			OPT_UNREACHABLE;
-		}
-	}
 
 	assert((pp_output_lock = SDL_CreateMutex()) != NULL);
 

@@ -34,14 +34,12 @@ because the spectogram is rather low in resolution (a real-time requirement).
  - `f0` estimates are noisy when signal-to-noise is low. This could probably be
    solved with filtering (at the expense of latency of course)
 
- - It's bad at detecting low frequencies. This is due to lack of spectogram
-   resolution; spectogram bins are ~45hz apart (`bin_size =
-   internal_sample_rate / bucket_size / 2` with `internal_sample_rate=12khz`,
-   `bucket_size=128`), and you need at least two values to have a peak, so
-   problems start below 100-150hz. It could probably be solved by using higher
-   resolution spectrograms, maybe even in addition to the low-resolution one.
-   Of course, this would come at the expense of latency and performance, but
-   real-time DFT is an exercise in tradeoffs anyway :-)
+ - It's bad at detecting low frequencies (below 50-100hz?). This is due to low
+   spectrogram resolution. More testing (bass guitars!) is probably needed to
+   figure out exactly how bad, or not bad, it is. But consider that the
+   spectrogram has 512 bins @ 12khz (internal sample rate); this corresponds to
+   a bin size of about 12hz (12000/512/2), and you need a couple of bins to
+   detect a peak...
 
  - There's room for optimizations! NSDF calculation could probably be
    vectorized (SIMD). Auto-correlation (which is similar to NSDF) can be

@@ -21,9 +21,11 @@ struct PP__FFT {
 struct PP {
 	// config:
 	float noise_gate_rms_threshold; // rms < noise_gate_rms_threshold will be unvoiced
+	float pitch0_f0; // set to PP_PITCH0_F0 during pp_init() but you can change it online. if zero, pitch will not be outputted
 
 	// output:
 	float f0; // fundamental frequency, or 0 if unvoiced
+	float pitch; // 12.0/oct, relative to pitch0_f0
 	float rms; // root mean square
 
 	int frame_counter;
@@ -121,6 +123,10 @@ PP_DEF void pp_destroy(struct PP* pp);
 #define PP_N_BUCKETS (4)
 #endif
 
+/* fundamental frequency of pitch=0 */
+#ifndef PP_PITCH0_F0
+#define PP_PITCH0_F0 (440.0f)
+#endif
 
 #define PP_WINDOW_SIZE (PP_BUCKET_SIZE * PP_N_BUCKETS)
 
@@ -767,6 +773,10 @@ static inline float pp__fft_window_function(float x)
 
 PP_DEF void pp_init(struct PP* pp, int input_sample_rate_hz)
 {
+	memset(pp, 0, sizeof *pp);
+
+	pp->pitch0_f0 = PP_PITCH0_F0;
+
 	const int desired_ds_freq = PP_IDEAL_SAMPLE_RATE_HZ;
 	int best_decimation_factor = -1;
 	int best_diff = 0;
@@ -1144,6 +1154,14 @@ PP_DEF void pp__flush(struct PP* pp)
 		f0 = 0;
 	}
 	pp->f0 = f0;
+
+	if (pp->pitch0_f0 > 0) {
+		if (f0 > 0) {
+			pp->pitch = (log2f(f0) - log2f(pp->pitch0_f0)) * 12.0f;
+		} else {
+			pp->pitch = 0;
+		}
+	}
 
 	pp__bucket_reset(pp);
 	pp->window_scroll_is_pending = 1;

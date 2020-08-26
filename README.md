@@ -1,6 +1,7 @@
 # Pitch Prefect
 
-Real-time (~10ms latency) pitch detection of monophonic signals.
+Real-time (~10ms latency) pitch detection of monophonic signals, presented as a
+single-file C header library (for ease of use; inspired by the stb libraries).
 
 It's based on the MPM algorithm from "A Smarter Way to Find Pitch" by McLeod
 and Wyvill, but it uses spectrogram analysis to further refine the result.

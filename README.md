@@ -34,7 +34,10 @@ because the spectogram is rather low in resolution (a real-time requirement).
    solved with filtering (at the expense of latency of course)
 
  - There's room for optimizations! NSDF calculation could probably be
-   vectorized (SIMD)
+   vectorized (SIMD). Auto-correlation (which is similar to NSDF) can be
+   optimized using Discrete Fourier Transforms (`O(n log n)` instead of
+   `O(n^2)`), but my maths is not nearly dope enough to figure out whether it's
+   possible with NSDF too?
 
 
 # Examples

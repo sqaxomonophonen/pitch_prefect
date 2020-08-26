@@ -39,7 +39,7 @@ because the spectogram is rather low in resolution (a real-time requirement).
 
 # Examples
 
-The sub directories contain various demos and tools using Pitch Prefect.
+Look in the `pptool` and `fungame` sub-directories.
 
 
 # License

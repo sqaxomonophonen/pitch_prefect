@@ -810,9 +810,7 @@ PP_DEF void pp_init(struct PP* pp, int input_sample_rate_hz)
 	pp->nsdf = pp__window_alloc();
 	pp->spectrogram = pp__window_alloc();
 
-	pp->frame_counter= 0;
-
-	pp__bucket_reset(pp);
+	pp_reset(pp);
 }
 
 #if 0
@@ -1180,6 +1178,17 @@ PP_DEF void pp__scroll_window(struct PP* pp)
 		(PP_WINDOW_SIZE - PP_BUCKET_SIZE) * sizeof(*pp->window)
 	);
 	pp->window_scroll_is_pending = 0;
+}
+
+PP_DEF void pp_reset(struct PP* pp)
+{
+	pp->window_scroll_is_pending = 0;
+	pp->f0 = 0;
+	if (pp->pitch0_f0 != 0) {
+		pp->pitch = 0;
+	}
+	pp->rms = 0;
+	pp__bucket_reset(pp);
 }
 
 # endif

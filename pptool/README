@@ -1,5 +1,3 @@
 tool for testing/verifying pitch prefect
 
-symlink the following:
- ./libsoundio -> root of libsoundio (https://github.com/andrewrk/libsoundio)
- ./nanovg -> root of nanovg (https://github.com/memononen/nanovg)
+symlink ./nanovg -> root of nanovg (https://github.com/memononen/nanovg)

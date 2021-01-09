@@ -2,9 +2,9 @@
 #include <stdio.h>
 #include <assert.h>
 
-#include <SDL.h>
+#include "miniaudio.h"
 
-#include <soundio/soundio.h>
+#include <SDL.h>
 
 #ifdef BUILD_LINUX
 #define GL_GLEXT_PROTOTYPES
@@ -321,8 +321,6 @@ static void Rec_load(struct Rec* rec, const char* filename)
 	}
 
 	assert(rec->n == n);
-
-	fclose(f);
 }
 
 static void Rec_reload(struct Rec* rec)
@@ -437,67 +435,11 @@ static void Rec_save(struct Rec* rec, const char* filename)
 		FLAC__stream_encoder_delete(encoder);
 	}
 
-	fclose(f);
-
 	printf("wrote %s\n", filename);
 }
 
 SDL_mutex* is_recording_lock;
 static int is_recording;
-
-static void audio_in_callback(struct SoundIoInStream *instream, int frame_count_min, int frame_count_max)
-{
-	#if 0
-	double latency;
-	int e = soundio_instream_get_latency(instream, &latency);
-	printf("instream latency: %f (%d)\n", latency, e);
-	#endif
-
-	SDL_LockMutex(is_recording_lock);
-	int copy_is_recording = is_recording;
-	SDL_UnlockMutex(is_recording_lock);
-	if (!copy_is_recording) return;
-
-	int frames_left = frame_count_max;
-
-	int n_read = 0;
-	while (frames_left > 0) {
-		struct SoundIoChannelArea *areas;
-		int frame_count = frames_left;
-		int err;
-		if ((err = soundio_instream_begin_read(instream, &areas, &frame_count))) {
-			fprintf(stderr, "AUDIO ERROR begin read: %s", soundio_strerror(err));
-			exit(EXIT_FAILURE);
-		}
-		if (frame_count == 0) break;
-		//printf("read frames: %d\n", frame_count);
-
-		if (areas) {
-			//int bytes_per_sample = instream->bytes_per_sample;
-			float x_max, x_min;
-			for (int frame = 0; frame < frame_count; frame++) {
-				const int ch = 0;
-				float x = *((float*)areas[ch].ptr);
-				if (frame == 0 || x > x_max) x_max = x;
-				if (frame == 0 || x < x_min) x_min = x;
-				if (pp_write_one(&pp, x)) {
-					Rec_push_pp(&rec, &pp);
-				}
-				areas[ch].ptr += areas[ch].step;
-			}
-			//printf("%f %f\n", x_max, x_min);
-		}
-
-		if ((err = soundio_instream_end_read(instream))) {
-			fprintf(stderr, "AUDIO ERROR end read: %s", soundio_strerror(err));
-			exit(EXIT_FAILURE);
-		}
-
-		n_read += frame_count;
-		frames_left -= frame_count;
-		if (frames_left <= 0) break;
-	}
-}
 
 SDL_mutex* playback_lock;
 int playback_start = 0;
@@ -506,37 +448,48 @@ int playback_i0 = 0;
 int playback_i1 = 0;
 int playback_position_frame = 0;
 
-static void audio_out_callback(struct SoundIoOutStream *outstream, int frame_count_min, int frame_count_max)
+static void audio_callback(ma_device* device, void* v_output, const void* v_input, ma_uint32 n_frames)
 {
-	#if 0
-	double latency;
-	int e = soundio_outstream_get_latency(outstream, &latency);
-	printf("outstream latency: %f (%d)\n", latency, e);
-	#endif
-	// TODO
+	// input
+	{
+		const float* input = v_input;
 
-	SDL_LockMutex(playback_lock);
-	int copy_playback_start = playback_start;
-	int copy_playback_position = playback_position;
-	int copy_playback_i0 = playback_i0;
-	int copy_playback_i1 = playback_i1;
-	SDL_UnlockMutex(playback_lock);
-
-	const struct SoundIoChannelLayout *layout = &outstream->layout;
-	struct SoundIoChannelArea *areas;
-	int frames_left = frame_count_max;
-	int err;
-
-	int stop = 0;
-	int dpp = 0;
-	while (frames_left > 0) {
-		int frame_count = frames_left;
-		if ((err = soundio_outstream_begin_write(outstream, &areas, &frame_count))) {
-			fprintf(stderr, "%s\n", soundio_strerror(err));
-			abort();
+		SDL_LockMutex(is_recording_lock);
+		int copy_is_recording = is_recording;
+		SDL_UnlockMutex(is_recording_lock);
+		if (copy_is_recording) {
+			const float* ip = input;
+			int n_channels = device->capture.channels;
+			for (int frame = 0; frame < (int)n_frames; frame++) {
+				float x = 0;
+				for (int i = 0; i < n_channels; i++) {
+					x += *(ip++);
+				}
+				if (pp_write_one(&pp, x)) {
+					Rec_push_pp(&rec, &pp);
+				}
+			}
 		}
+	}
 
-		for (int frame = 0; frame < frame_count; frame++) {
+	// output
+	{
+		float* output = v_output;
+
+		SDL_LockMutex(playback_lock);
+		int copy_playback_start = playback_start;
+		int copy_playback_position = playback_position;
+		int copy_playback_i0 = playback_i0;
+		int copy_playback_i1 = playback_i1;
+		SDL_UnlockMutex(playback_lock);
+
+		int stop = 0;
+		int dpp = 0;
+
+		float* ip = output;
+		int n_channels = device->playback.channels;
+
+		for (int frame = 0; frame < (int)n_frames; frame++) {
 			float sample = 0.0;
 			if (copy_playback_start) {
 				int ppos = (copy_playback_position + dpp) / pp.decimation_factor;
@@ -549,154 +502,46 @@ static void audio_out_callback(struct SoundIoOutStream *outstream, int frame_cou
 				}
 				dpp++;
 			}
-			for (int channel = 0; channel < layout->channel_count; channel += 1) {
-				float *ptr = (float*)(areas[channel].ptr + areas[channel].step * frame);
-				*ptr = sample;
+
+			for (int i = 0; i < n_channels; i++) {
+				*(ip++) = sample;
 			}
 		}
 
-		if ((err = soundio_outstream_end_write(outstream))) {
-			fprintf(stderr, "%s\n", soundio_strerror(err));
-			abort();
-		}
-
-		frames_left -= frame_count;
+		SDL_LockMutex(playback_lock);
+		if (stop) playback_start = 0;
+		playback_position += dpp;
+		playback_position_frame = copy_playback_i0 + playback_position / (pp.decimation_factor * PP_BUCKET_SIZE);
+		SDL_UnlockMutex(playback_lock);
 	}
-
-	//printf("pos %d / dpp %d / frame count: %d\n", copy_playback_position, dpp, frame_count_max);
-
-	SDL_LockMutex(playback_lock);
-	if (stop) playback_start = 0;
-	playback_position += dpp;
-	playback_position_frame = copy_playback_i0 + playback_position / (pp.decimation_factor * PP_BUCKET_SIZE);
-	SDL_UnlockMutex(playback_lock);
 }
 
-static void audio_in_overflow_callback(struct SoundIoInStream *instream) {
-	fprintf(stderr, "AUDIO-IN OVERRUN\n");
-}
+ma_device audio_device;
 
-static void audio_in_error_callback(struct SoundIoInStream *instream, int err) {
-	fprintf(stderr, "AUDIO-IN ERROR %d\n", err);
-}
-
-static void audio_out_error_callback(struct SoundIoOutStream *outstream, int err) {
-	fprintf(stderr, "AUDIO-OUT ERROR %d\n", err);
-}
-
-struct SoundIo *sio;
 static void audio_init()
 {
-	assert((sio = soundio_create()));
-
-	int err;
-	err = soundio_connect(sio);
-	if (err) {
-		fprintf(stderr, "error connecting: %s", soundio_strerror(err));
-		exit(EXIT_FAILURE);
-	}
-
-	soundio_flush_events(sio);
+	assert((is_recording_lock = SDL_CreateMutex()) != NULL);
+	assert((playback_lock = SDL_CreateMutex()) != NULL);
 
 	const int sample_rate = 48000;
-	const float software_latency = 1.0 / 100.0;
 
-	struct SoundIoInStream *instream;
-	{
-		int device_index = soundio_default_input_device_index(sio);
-		struct SoundIoDevice *selected_device = soundio_get_input_device(sio, device_index);
+	ma_device_config config = ma_device_config_init(ma_device_type_duplex);
+	config.capture.format = ma_format_f32;
+	config.capture.channels = 1;
+	config.playback.format = ma_format_f32;
+	config.playback.channels = 1;
+	config.sampleRate = sample_rate;
+	config.dataCallback = audio_callback;
 
-		fprintf(stderr, "Input device: %s\n", selected_device->name);
-
-		if (selected_device->probe_error) {
-			fprintf(stderr, "Unable to probe device: %s\n", soundio_strerror(selected_device->probe_error));
-			exit(EXIT_FAILURE);
-		}
-
-		soundio_device_sort_channel_layouts(selected_device);
-
-		if (!soundio_device_supports_sample_rate(selected_device, sample_rate)) {
-			fprintf(stderr, "Could not set sample rate to %d\n", sample_rate);
-			exit(EXIT_FAILURE);
-		}
-
-		enum SoundIoFormat fmt = SoundIoFormatFloat32NE;
-
-		instream = soundio_instream_create(selected_device);
-		assert(instream);
-		instream->format = fmt;
-		instream->sample_rate = sample_rate;
-		instream->software_latency = software_latency;
-		instream->read_callback = audio_in_callback;
-		instream->overflow_callback = audio_in_overflow_callback;
-		instream->error_callback = audio_in_error_callback;
-		instream->userdata = NULL;
-
-		if ((err = soundio_instream_open(instream))) {
-			fprintf(stderr, "unable to open input stream: %s", soundio_strerror(err));
-			exit(EXIT_FAILURE);
-		}
-
-		//pp_init(&pp, instream->sample_rate);
-
+	if (ma_device_init(NULL, &config, &audio_device) != MA_SUCCESS) {
+		fprintf(stderr, "ma_device_init() failed\n");
+		exit(EXIT_FAILURE);
 	}
 
-	struct SoundIoOutStream *outstream;
-	{
-		int device_index = soundio_default_output_device_index(sio);
-		struct SoundIoDevice *selected_device = soundio_get_output_device(sio, device_index);
-
-		fprintf(stderr, "Output device: %s\n", selected_device->name);
-
-		if (selected_device->probe_error) {
-			fprintf(stderr, "Unable to probe device: %s\n", soundio_strerror(selected_device->probe_error));
-			exit(EXIT_FAILURE);
-		}
-
-		soundio_device_sort_channel_layouts(selected_device);
-
-		const int sample_rate = 48000;
-		if (!soundio_device_supports_sample_rate(selected_device, sample_rate)) {
-			fprintf(stderr, "Could not set sample rate to %d\n", sample_rate);
-			exit(EXIT_FAILURE);
-		}
-
-		enum SoundIoFormat fmt = SoundIoFormatFloat32NE;
-
-		outstream = soundio_outstream_create(selected_device);
-		assert(outstream);
-		outstream->format = fmt;
-		outstream->sample_rate = sample_rate;
-		outstream->software_latency = software_latency;
-		outstream->write_callback = audio_out_callback;
-		//outstream->overflow_callback = overflow_callback;
-		outstream->error_callback = audio_out_error_callback;
-		outstream->userdata = NULL;
-
-		if ((err = soundio_outstream_open(outstream))) {
-			fprintf(stderr, "unable to open input stream: %s", soundio_strerror(err));
-			exit(EXIT_FAILURE);
-		}
-
-	}
-
-	printf("instream->sample_rate = %d\n", instream->sample_rate);
-	printf("instream->software_latency = %f\n", instream->software_latency);
-	printf("outstream->sample_rate = %d\n", outstream->sample_rate);
-	printf("outstream->software_latency = %f\n", outstream->software_latency);
-
-	pp_init(&pp, instream->sample_rate);
+	pp_init(&pp, sample_rate);
 	pp.noise_gate_rms_threshold = DEFAULT_NOISE_GATE_RMS_THRESHOLD ;
 
-	if ((err = soundio_instream_start(instream))) {
-		fprintf(stderr, "unable to start input device: %s", soundio_strerror(err));
-		exit(EXIT_FAILURE);
-	}
-
-	if ((err = soundio_outstream_start(outstream))) {
-		fprintf(stderr, "unable to start output device: %s", soundio_strerror(err));
-		exit(EXIT_FAILURE);
-	}
+	ma_device_start(&audio_device);
 }
 
 SDL_Window* window;
@@ -787,7 +632,7 @@ char* prg;
 
 static void usage()
 {
-	fprintf(stderr, "usage: %s [-h]\n", prg);
+	fprintf(stderr, "usage: %s [-h] [infile.ptc]\n", prg);
 	fprintf(stderr, " -h / --help           help\n");
 	exit(EXIT_FAILURE);
 }
@@ -846,9 +691,6 @@ int main(int argc, char** argv)
 	}
 
 	is_recording = (mode == 0);
-
-	assert((is_recording_lock = SDL_CreateMutex()) != NULL);
-	assert((playback_lock = SDL_CreateMutex()) != NULL);
 
 	audio_init();
 
@@ -937,10 +779,9 @@ int main(int argc, char** argv)
 						case_frame++;
 					} else if (sym == '1') {
 						show_f0 = !show_f0;
-					} else if (sym == '2') { 
+					} else if (sym == '2') {
 						show_expected_f0 = !show_expected_f0;
 					}
-					
 				}
 
 				{

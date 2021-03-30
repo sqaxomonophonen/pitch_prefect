@@ -86,7 +86,7 @@ static void Rec_push_pp(struct Rec* rec, struct PP* pp)
 	float* float_data = &rec->float_data[n * REC_STRIDE];
 	size_t sz = PP_WINDOW_SIZE * sizeof(*float_data);
 	memcpy(&float_data[0*PP_WINDOW_SIZE], pp->window, sz);
-	memcpy(&float_data[1*PP_WINDOW_SIZE], pp->spectrogram, sz);
+	memcpy(&float_data[1*PP_WINDOW_SIZE], pp->spectrogram, sz); // spectrogram is only half-size, but whatever...
 	memcpy(&float_data[2*PP_WINDOW_SIZE], pp->nsdf, sz);
 
 	SDL_LockMutex(rec->n_lock);
@@ -701,7 +701,7 @@ int main(int argc, char** argv)
 
 	// scrolling spectrogram: ss/SS (python joke)
 	#define SS_WIDTH (1920)
-	#define SS_HEIGHT (PP_WINDOW_SIZE/2)
+	#define SS_HEIGHT PP_SPECTROGRAM_SZ
 	//const int ss_image_flags = NVG_IMAGE_REPEATX | NVG_IMAGE_NEAREST;
 	const int ss_image_flags = NVG_IMAGE_NEAREST;
 	int ss_handle = nvgCreateImageRGBA(vg, SS_WIDTH, SS_HEIGHT, ss_image_flags, NULL);
@@ -951,9 +951,9 @@ int main(int argc, char** argv)
 			nvgTranslate(vg, scope_width, stack_y + spectrogram_height);
 			nvgBeginPath(vg);
 			nvgMoveTo(vg, 0, 0);
-			for (int i = 0; i < PP_WINDOW_SIZE; i++) {
-				float x = ((float)i / (float)PP_WINDOW_SIZE) * scope_width;
-				float y = pp__spectrogram_function(spectrogram[i]) * 6e-2 * -spectrogram_height;
+			for (int i = 0; i < PP_SPECTROGRAM_SZ; i++) {
+				float x = ((float)i / (float)PP_SPECTROGRAM_SZ) * scope_width;
+				float y = spectrogram[i] * 6e-2 * -spectrogram_height;
 				nvgLineTo(vg, x, y);
 			}
 			nvgLineTo(vg, scope_width, 0);
@@ -969,10 +969,10 @@ int main(int argc, char** argv)
 			float spectrogram_corrected_best_frequency = rec.simple[windows_index].spectrogram_corrected_best_frequency;
 			if (spectrogram_corrected_best_frequency > 0) {
 				nvgBeginPath(vg);
-				for (int i = 0; i < PP_WINDOW_SIZE; i++) {
-					float x = ((float)i / (float)PP_WINDOW_SIZE) * scope_width;
-					const float fft_bin_size = ((float)pp.decimated_sample_rate_hz / (float)PP_WINDOW_SIZE) * 0.5;
-					float y = -pp__spectrogram_scoring_function((float)i * (fft_bin_size / spectrogram_corrected_best_frequency)) * 14;
+				for (int i = 0; i < PP_SPECTROGRAM_SZ; i++) {
+					float x = ((float)(i) / (float)PP_SPECTROGRAM_SZ) * scope_width;
+					const float fft_frequency_step = (((float)pp.decimated_sample_rate_hz * 0.5f) / (float)PP_SPECTROGRAM_SZ);
+					float y = -pp__spectrogram_scoring_function((float)(i+1) * (fft_frequency_step / spectrogram_corrected_best_frequency)) * 20;
 					if (i == 0) {
 						nvgMoveTo(vg, x, y);
 					} else {
@@ -982,19 +982,6 @@ int main(int argc, char** argv)
 				nvgStrokeColor(vg, nvgRGBA(255, 255, 255, 180));
 				nvgStrokeWidth(vg, 1.0);
 				nvgStroke(vg);
-
-				const float harmonic_max = 15.0;
-				for (float harmonic = 1; harmonic < harmonic_max; harmonic+=1.0) {
-					float f = spectrogram_corrected_best_frequency * harmonic;
-					float w = 12;
-					float x = scope_width * (f / (pp.decimated_sample_rate_hz*0.5));
-					nvgBeginPath(vg);
-					const float yextend = 10;
-					nvgRect(vg, x-w*0.5, -scope_height, w, scope_height + yextend);
-					//nvgCircle(vg, x, yextend, 2.5);
-					nvgFillColor(vg, nvgRGBA(50, 120, 255, 60 * (1.0-harmonic/harmonic_max)));
-					nvgFill(vg);
-				}
 			}
 
 			nvgRestore(vg);
@@ -1053,18 +1040,17 @@ int main(int argc, char** argv)
 					int rec_index = i1 - SS_WIDTH + x;
 					if (rec_index >= 0) {
 						float* spectrogram = Rec_get_float_data(&rec, REC_SPECTROGRAM, rec_index);
-						float v = pp__spectrogram_function(spectrogram[si]) * 0.1;
+						float v = spectrogram[si] * 0.2;
 						float r = v;
 						float g = v*v*v*v;
 						float b = v*v*v*v*v*v;
 						//assert(isfinite(r));
 						//assert(isfinite(g));
 						//assert(isfinite(b));
-						int ri = clampi(r * 255.0f, 0, 0xff);
-						int gi = clampi(g * 255.0f, 0, 0xff);
-						int bi = clampi(b * 255.0f, 0, 0xff);
-
-						int ai = 255;
+						int ri = clampi(r * 255.0f, 0x0, 0xff);
+						int gi = clampi(g * 255.0f, 0x0, 0xff);
+						int bi = clampi(b * 255.0f, 0x0, 0xff);
+						int ai = 0xff;
 						color = (ri << 0) | (gi << 8) | (bi << 16) | (ai << 24);
 					}
 					ss_data[ss_index++] = color;

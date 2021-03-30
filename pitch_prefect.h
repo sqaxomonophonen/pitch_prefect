@@ -133,6 +133,10 @@ PP_DEF void pp_destroy(struct PP* pp);
 
 #define PP_WINDOW_SIZE (PP_BUCKET_SIZE * PP_N_BUCKETS)
 
+#define PP_SPECTROGRAM_SZ (PP_WINDOW_SIZE/2)
+
+#define PP_PI (3.141592653589793)
+
 /* FFTPACK port-to-C stolen from monty/xiph - public domain - thanks! see:
  *    http://www.netlib.org/fftpack/fft.c
  * The code here does forward real-FFT only; using it to make a spectrogram */
@@ -140,7 +144,7 @@ PP_DEF void pp_destroy(struct PP* pp);
 static void pp__drfti1(int n, float *wsave, int *ifac)
 {
 	static int ntryh[4] = { 4,2,3,5 };
-	static float tpi = 6.28318530717958647692528676655900577;
+	static float tpi = 2*PP_PI;
 	float arg,argh,argld,fi;
 	int ntry=0,i,j=-1;
 	int k1, l1, l2, ib;
@@ -363,7 +367,7 @@ L105:
 
 static void pp__dradfg(int ido,int ip,int l1,int idl1,float *cc,float *c1, float *c2,float *ch,float *ch2,float *wa)
 {
-	static float tpi=6.28318530717958647692528676655900577;
+	static float tpi=2*PP_PI;
 	int idij,ipph,i,j,k,l,ic,ik,is;
 	int t0,t1,t2,t3,t4,t5,t6,t7,t8,t9,t10;
 	float dc2,ai1,ai2,ar1,ar2,ds2;
@@ -732,9 +736,15 @@ void pp__fft_init(struct PP__FFT* fft, int n)
 {
 	memset(fft, 0, sizeof *fft);
 	fft->n = n;
-	assert((fft->wsave = calloc(3*n, sizeof *fft->wsave)) != NULL);
-	assert((fft->ifac = calloc(32, sizeof *fft->ifac)) != NULL);
-	if (fft->n > 1) pp__drfti1(fft->n, fft->wsave+fft->n, fft->ifac);
+	// https://www.netlib.org/fftpack/doc says wsave must be 2*n+15 but I
+	// believe that includes ifac (valgrind seems to agree with 2*n for n
+	// in [1,1024]; valgrind detects invalid reads/writes even one byte
+	// out-of-bounds)
+	assert((fft->wsave = calloc(2*n, sizeof *fft->wsave)) != NULL);
+	assert((fft->ifac  = calloc(32, sizeof *fft->ifac)) != NULL);
+	if (fft->n > 1) {
+		pp__drfti1(fft->n, fft->wsave+fft->n, fft->ifac);
+	}
 }
 
 float* pp__fft_alloc(struct PP__FFT* fft)
@@ -765,7 +775,7 @@ static float* pp__window_alloc()
 
 static inline float pp__hann(float x)
 {
-	float s = sinf(x * 3.1415);
+	float s = sinf(x * PP_PI);
 	return s * s;
 }
 
@@ -796,16 +806,17 @@ PP_DEF void pp_init(struct PP* pp, int input_sample_rate_hz)
 	pp->decimation_factor = best_decimation_factor;
 	pp->decimated_sample_rate_hz = input_sample_rate_hz / best_decimation_factor;
 
-	pp__fft_init(&pp->fft, PP_WINDOW_SIZE*2); // XXX is this correct?
+	pp__fft_init(&pp->fft, PP_WINDOW_SIZE);
 	pp->fft_data = pp__fft_alloc(&pp->fft);
-	assert((pp->fft_window_function = calloc(PP_WINDOW_SIZE, sizeof *pp->fft_window_function)) != NULL);
+	pp->fft_window_function = pp__window_alloc();
 	for (int i = 0; i < PP_WINDOW_SIZE; i++) {
 		pp->fft_window_function[i] = pp__fft_window_function((float)i / (float)PP_WINDOW_SIZE);
 	}
 
 	pp->window = pp__window_alloc();
 	pp->nsdf = pp__window_alloc();
-	pp->spectrogram = pp__window_alloc();
+	assert((pp->spectrogram = calloc(PP_WINDOW_SIZE/2, sizeof *pp->spectrogram)) != NULL);
+
 
 	pp_reset(pp);
 }
@@ -988,9 +999,10 @@ static inline float pp__parabola_pivot(int n, float* ys)
 	return -b / (2*c) + pp__n_center(n);
 }
 
-static inline float pp__spectrogram_function(float x)
+static inline float pp__calc_spectrogram_val(float re, float im)
 {
-	return log2f(x * 4.0 + 1.0);
+	float mag = sqrtf(re*re + im*im);
+	return log2f(mag * 4.0 + 1.0);
 }
 
 PP_DEF void pp__flush(struct PP* pp)
@@ -1088,20 +1100,25 @@ PP_DEF void pp__flush(struct PP* pp)
 	memcpy(fft_data, window, PP_WINDOW_SIZE * sizeof *fft_data);
 	float* fft_window_function = pp->fft_window_function;
 	for (int i = 0; i < PP_WINDOW_SIZE; i++) fft_data[i] *= fft_window_function[i];
-	memset(fft_data + PP_WINDOW_SIZE, 0, PP_WINDOW_SIZE * sizeof *fft_data);
 	pp__fft_forward(&pp->fft, fft_data);
 
-	int fi = 0;
-	for (int i = 0; i < PP_WINDOW_SIZE; i++) {
-		float re = fft_data[fi++];
-		float im = fft_data[fi++];
-		float mag = re*re + im*im;
-		spectrogram[i] = mag;
+	{
+		int fi = 1;
+		for (int i = 0; i < (PP_SPECTROGRAM_SZ-1); i++) {
+			float re = fft_data[fi++];
+			float im = fft_data[fi++];
+			spectrogram[i] = pp__calc_spectrogram_val(re, im);
+		}
+		{
+			float re = fft_data[fi++];
+			spectrogram[PP_SPECTROGRAM_SZ-1] = pp__calc_spectrogram_val(re, 0.0f); // no imaginary part in last bin
+		}
+		assert(fi == PP_WINDOW_SIZE);
 	}
 
 	/* use spectrogram to possibly correct f0 */
-	const float fft_bin_size = ((float)pp->decimated_sample_rate_hz / (float)PP_WINDOW_SIZE) * 0.5;
-	const float f0_min = fft_bin_size * 3;
+	const float fft_frequency_step = (((float)pp->decimated_sample_rate_hz * 0.5f) / (float)PP_SPECTROGRAM_SZ);
+	const float f0_min = fft_frequency_step * 2.5f;
 	float best_ratio = 1;
 	float best_ratio_score = 0.0f;
 	{
@@ -1125,12 +1142,12 @@ PP_DEF void pp__flush(struct PP* pp)
 			float ratio = try_f0_ratios[i];
 			float f0_guess = nsdf_best_frequency * ratio;
 			if (f0_guess < f0_min) continue;
+			const float xstep = fft_frequency_step / f0_guess;
+			float x = 0;
 			float score = 0.0;
-			float x = 0.0;
-			const float xstep = fft_bin_size / f0_guess;
-			for (int j = 0; j < PP_WINDOW_SIZE; j++) {
-				score += pp__spectrogram_function(spectrogram[j]) * pp__spectrogram_scoring_function(x);
+			for (int j = 0; j < PP_SPECTROGRAM_SZ; j++) {
 				x += xstep;
+				score += spectrogram[j] * pp__spectrogram_scoring_function(x);
 			}
 			if (i == 0 || score > best_ratio_score) {
 				best_ratio_score = score;
